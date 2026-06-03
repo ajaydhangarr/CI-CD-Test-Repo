@@ -31,11 +31,13 @@ jobs:
           sf project deploy validate \
             --manifest manifest/package.xml \
             --target-org dev-org \
-            --test-level RunLocalTests
+            --test-level RunSpecifiedTests \
+            --tests WorkflowDataMapperTest
 
       - name: Deploy to Org
         run: |
           sf project deploy start \
             --manifest manifest/package.xml \
             --target-org dev-org \
-            --test-level RunLocalTests
+            --test-level RunSpecifiedTests \
+            --tests WorkflowDataMapperTest

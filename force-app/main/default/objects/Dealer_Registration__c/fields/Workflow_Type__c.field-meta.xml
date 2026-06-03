@@ -10,9 +10,9 @@
         <valueSetDefinition>
             <sorted>false</sorted>
             <value>
-                <fullName>Warranty Claim</fullName>
+                <fullName>Dealer Registration</fullName>
                 <default>false</default>
-                <label>Warranty Claim Workflow</label>
+                <label>Dealer Registration Workflow</label>
             </value>
         </valueSetDefinition>
     </valueSet>
