@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Assigned_User__c</fullName>
+    <description>Stores the assigned workflow owner.</description>
+    <deleteConstraint>SetNull</deleteConstraint>
+    <label>Assigned User</label>
+    <referenceTo>User</referenceTo>
+    <relationshipLabel>Assigned User Records</relationshipLabel>
+    <relationshipName>Dealer_Registration_Assigned_User</relationshipName>
+    <required>false</required>
+    <type>Lookup</type>
+</CustomField>
+

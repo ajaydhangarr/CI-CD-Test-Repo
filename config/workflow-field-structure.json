@@ -1,0 +1,293 @@
+{
+  "commonFields": [
+    {
+      "apiName": "Full_Name__c",
+      "label": "Full Name",
+      "type": "Text",
+      "length": 255,
+      "description": "Stores the full name of the workflow user.",
+      "required": false
+    },
+    {
+      "apiName": "Email__c",
+      "label": "Email",
+      "type": "Email",
+      "description": "Stores the email address of the workflow user.",
+      "required": false
+    },
+    {
+      "apiName": "Phone_Number__c",
+      "label": "Phone Number",
+      "type": "Phone",
+      "description": "Stores the contact number of the workflow user.",
+      "required": false
+    },
+    {
+      "apiName": "Workflow_Type__c",
+      "label": "Workflow Type",
+      "type": "Picklist",
+      "values": [
+        "Customer Onboarding",
+        "Dealer Registration",
+        "Warranty Claim"
+      ],
+      "description": "Identifies the workflow category.",
+      "required": false
+    },
+    {
+      "apiName": "Status__c",
+      "label": "Workflow Status",
+      "type": "Picklist",
+      "values": [
+        "Draft",
+        "In Progress",
+        "Submitted",
+        "Approved",
+        "Rejected",
+        "Completed"
+      ],
+      "description": "Tracks the current workflow status.",
+      "required": false
+    },
+    {
+      "apiName": "Step_Status__c",
+      "label": "Step Status",
+      "type": "Text",
+      "length": 255,
+      "description": "Stores the current workflow step information.",
+      "required": false
+    },
+    {
+      "apiName": "JSON_Data__c",
+      "label": "JSON Data",
+      "type": "LongTextArea",
+      "length": 32000,
+      "visibleLines": 10,
+      "description": "Stores complete workflow response data in JSON format."
+    },
+    {
+      "apiName": "Submission_Date__c",
+      "label": "Submission Date",
+      "type": "DateTime",
+      "description": "Stores workflow submission timestamp.",
+      "required": false
+    },
+    {
+      "apiName": "Assigned_User__c",
+      "label": "Assigned User",
+      "type": "Lookup",
+      "referenceTo": "User",
+      "description": "Stores the assigned workflow owner.",
+      "required": false
+    }
+  ],
+  "objects": [
+    {
+      "apiName": "Customer_Onboarding__c",
+      "label": "Customer Onboarding",
+      "pluralLabel": "Customer Onboardings",
+      "workflowTypeValue": "Customer Onboarding",
+      "description": "Stores customer onboarding workflow submissions and reusable workflow state.",
+      "fields": [
+        {
+          "apiName": "Customer_Type__c",
+          "label": "Customer Type",
+          "type": "Picklist",
+          "values": [
+            "Individual",
+            "Business"
+          ],
+          "description": "Identifies whether the onboarding customer is an individual or business.",
+          "required": false
+        },
+        {
+          "apiName": "Preferred_Contact_Method__c",
+          "label": "Preferred Contact Method",
+          "type": "Picklist",
+          "values": [
+            "Email",
+            "Phone",
+            "SMS"
+          ],
+          "description": "Stores the customer's preferred contact channel.",
+          "required": false
+        },
+        {
+          "apiName": "Address__c",
+          "label": "Address",
+          "type": "LongTextArea",
+          "length": 32000,
+          "visibleLines": 5,
+          "description": "Stores the customer's address details."
+        },
+        {
+          "apiName": "City__c",
+          "label": "City",
+          "type": "Text",
+          "length": 100,
+          "description": "Stores the customer's city.",
+          "required": false
+        },
+        {
+          "apiName": "State__c",
+          "label": "State",
+          "type": "Text",
+          "length": 100,
+          "description": "Stores the customer's state or province.",
+          "required": false
+        },
+        {
+          "apiName": "Postal_Code__c",
+          "label": "Postal Code",
+          "type": "Text",
+          "length": 20,
+          "description": "Stores the customer's postal or ZIP code.",
+          "required": false
+        }
+      ]
+    },
+    {
+      "apiName": "Dealer_Registration__c",
+      "label": "Dealer Registration",
+      "pluralLabel": "Dealer Registrations",
+      "workflowTypeValue": "Dealer Registration",
+      "description": "Stores dealer registration workflow submissions and reusable workflow state.",
+      "fields": [
+        {
+          "apiName": "Company_Name__c",
+          "label": "Company Name",
+          "type": "Text",
+          "length": 255,
+          "description": "Stores the registered dealer company name.",
+          "required": false
+        },
+        {
+          "apiName": "Business_Type__c",
+          "label": "Business Type",
+          "type": "Picklist",
+          "values": [
+            "Distributor",
+            "Reseller",
+            "Service Partner"
+          ],
+          "description": "Identifies the dealer's business category.",
+          "required": false
+        },
+        {
+          "apiName": "GST_Number__c",
+          "label": "GST Number",
+          "type": "Text",
+          "length": 50,
+          "description": "Stores the dealer GST registration number.",
+          "required": false
+        },
+        {
+          "apiName": "License_Number__c",
+          "label": "License Number",
+          "type": "Text",
+          "length": 100,
+          "description": "Stores the dealer business license number.",
+          "required": false
+        },
+        {
+          "apiName": "Bank_Name__c",
+          "label": "Bank Name",
+          "type": "Text",
+          "length": 255,
+          "description": "Stores the dealer bank name.",
+          "required": false
+        },
+        {
+          "apiName": "Account_Number__c",
+          "label": "Account Number",
+          "type": "Text",
+          "length": 100,
+          "description": "Stores the dealer bank account number.",
+          "required": false
+        },
+        {
+          "apiName": "IFSC_Code__c",
+          "label": "IFSC Code",
+          "type": "Text",
+          "length": 50,
+          "description": "Stores the dealer bank IFSC code.",
+          "required": false
+        }
+      ]
+    },
+    {
+      "apiName": "Warranty_Claim__c",
+      "label": "Warranty Claim",
+      "pluralLabel": "Warranty Claims",
+      "workflowTypeValue": "Warranty Claim",
+      "description": "Stores warranty claim workflow submissions and reusable workflow state.",
+      "fields": [
+        {
+          "apiName": "Product_Name__c",
+          "label": "Product Name",
+          "type": "Text",
+          "length": 255,
+          "description": "Stores the product name for the warranty claim.",
+          "required": false
+        },
+        {
+          "apiName": "Serial_Number__c",
+          "label": "Serial Number",
+          "type": "Text",
+          "length": 100,
+          "description": "Stores the product serial number.",
+          "required": false
+        },
+        {
+          "apiName": "Purchase_Date__c",
+          "label": "Purchase Date",
+          "type": "Date",
+          "description": "Stores the original product purchase date.",
+          "required": false
+        },
+        {
+          "apiName": "Issue_Type__c",
+          "label": "Issue Type",
+          "type": "Picklist",
+          "values": [
+            "Physical Damage",
+            "Manufacturing Defect",
+            "Performance Issue",
+            "Other"
+          ],
+          "description": "Classifies the type of warranty issue.",
+          "required": false
+        },
+        {
+          "apiName": "Issue_Description__c",
+          "label": "Issue Description",
+          "type": "LongTextArea",
+          "length": 32000,
+          "visibleLines": 5,
+          "description": "Stores the detailed issue description for the warranty claim."
+        },
+        {
+          "apiName": "Severity__c",
+          "label": "Severity",
+          "type": "Picklist",
+          "values": [
+            "Low",
+            "Medium",
+            "High",
+            "Critical"
+          ],
+          "description": "Tracks the severity level of the warranty claim.",
+          "required": false
+        },
+        {
+          "apiName": "Invoice_Number__c",
+          "label": "Invoice Number",
+          "type": "Text",
+          "length": 100,
+          "description": "Stores the invoice number associated with the purchase.",
+          "required": false
+        }
+      ]
+    }
+  ]
+}
