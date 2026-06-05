@@ -25,52 +25,161 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Salesforce CLI
         run: npm install -g @salesforce/cli
 
-      - name: Authenticate to QA Org
-        if: github.ref_name == 'qa'
+      - name: Install Delta Deployment Plugin
+        run: echo y | sf plugins install sfdx-git-delta
+
+      - name: Generate Delta Package
+        id: delta
         run: |
-          echo "${{ secrets.SF_JWT_KEY }}" > server.key
+          FROM_COMMIT="${{ github.event.before }}"
+          TO_COMMIT="${{ github.sha }}"
+
+          if [ -z "$FROM_COMMIT" ] || [ "$FROM_COMMIT" = "0000000000000000000000000000000000000000" ]; then
+            FROM_COMMIT="HEAD~1"
+          fi
+
+          echo "Generating delta from $FROM_COMMIT to $TO_COMMIT"
+          sf sgd source delta \
+            --from "$FROM_COMMIT" \
+            --to "$TO_COMMIT" \
+            --output-dir changed-sources \
+            --generate-delta \
+            --source-dir force-app
+
+          echo "Generated delta package.xml:"
+          cat changed-sources/package/package.xml
+
+          if grep -q "<types>" changed-sources/package/package.xml; then
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            echo "from_commit=$FROM_COMMIT" >> "$GITHUB_OUTPUT"
+            echo "to_commit=$TO_COMMIT" >> "$GITHUB_OUTPUT"
+          else
+            echo "No deployable Salesforce metadata changes found."
+            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Detect Apex Test Scope
+        if: steps.delta.outputs.should_deploy == 'true'
+        id: tests
+        run: |
+          CHANGED_FILES="$(git diff --name-only "${{ steps.delta.outputs.from_commit }}" "${{ steps.delta.outputs.to_commit }}")"
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+
+          TEST_CLASSES="$(
+            echo "$CHANGED_FILES" |
+              grep -E '^force-app/.*/classes/[^/]*Test\.cls$' |
+              sed -E 's#.*/([^/]+)\.cls#\1#' |
+              sort -u |
+              paste -sd, -
+          )"
+
+          APEX_CHANGED="$(
+            echo "$CHANGED_FILES" |
+              grep -E '^force-app/.*/(classes/[^/]+\.cls|triggers/[^/]+\.trigger)$' || true
+          )"
+
+          if [ -n "$TEST_CLASSES" ]; then
+            TEST_LEVEL="RunSpecifiedTests"
+            echo "Detected changed Apex test classes: $TEST_CLASSES"
+          elif [ -n "$APEX_CHANGED" ]; then
+            TEST_LEVEL="RunLocalTests"
+            echo "Apex changed but no changed *Test.cls file was found. Running local tests for deployment safety."
+          else
+            TEST_LEVEL="NoTestRun"
+            echo "No Apex class or trigger changes found. Skipping Apex tests."
+          fi
+
+          echo "test_level=$TEST_LEVEL" >> "$GITHUB_OUTPUT"
+          echo "test_classes=$TEST_CLASSES" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Salesforce Org
+        if: steps.delta.outputs.should_deploy == 'true'
+        env:
+          QA_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
+          QA_USERNAME: ${{ secrets.SF_USERNAME }}
+          QA_JWT_KEY: ${{ secrets.SF_JWT_KEY }}
+          UAT_CLIENT_ID: ${{ secrets.UAT_SF_CLIENT_ID }}
+          UAT_USERNAME: ${{ secrets.UAT_SF_USERNAME }}
+          UAT_JWT_KEY: ${{ secrets.UAT_SF_JWT_KEY }}
+          PROD_CLIENT_ID: ${{ secrets.PROD_SF_CLIENT_ID }}
+          PROD_USERNAME: ${{ secrets.PROD_SF_USERNAME }}
+          PROD_JWT_KEY: ${{ secrets.PROD_SF_JWT_KEY }}
+        run: |
+          if [ "${{ github.ref_name }}" = "qa" ]; then
+            CLIENT_ID="$QA_CLIENT_ID"
+            USERNAME="$QA_USERNAME"
+            JWT_KEY="$QA_JWT_KEY"
+            TARGET_ENV="QA"
+          elif [ "${{ github.ref_name }}" = "uat" ]; then
+            CLIENT_ID="$UAT_CLIENT_ID"
+            USERNAME="$UAT_USERNAME"
+            JWT_KEY="$UAT_JWT_KEY"
+            TARGET_ENV="UAT"
+          elif [ "${{ github.ref_name }}" = "main" ]; then
+            CLIENT_ID="$PROD_CLIENT_ID"
+            USERNAME="$PROD_USERNAME"
+            JWT_KEY="$PROD_JWT_KEY"
+            TARGET_ENV="Production"
+          else
+            echo "Unsupported branch: ${{ github.ref_name }}"
+            exit 1
+          fi
+
+          echo "Authenticating to $TARGET_ENV org"
+          echo "$JWT_KEY" > server.key
           sf org login jwt \
-            --client-id "${{ secrets.SF_CLIENT_ID }}" \
+            --client-id "$CLIENT_ID" \
             --jwt-key-file server.key \
-            --username "${{ secrets.SF_USERNAME }}" \
+            --username "$USERNAME" \
             --instance-url https://login.salesforce.com \
             --alias target-org
 
-      - name: Authenticate to UAT Org
-        if: github.ref_name == 'uat'
+      - name: Run Apex Tests
+        if: steps.delta.outputs.should_deploy == 'true' && steps.tests.outputs.test_level != 'NoTestRun'
         run: |
-          echo "${{ secrets.UAT_SF_JWT_KEY }}" > server.key
-          sf org login jwt \
-            --client-id "${{ secrets.UAT_SF_CLIENT_ID }}" \
-            --jwt-key-file server.key \
-            --username "${{ secrets.UAT_SF_USERNAME }}" \
-            --instance-url https://login.salesforce.com \
-            --alias target-org
-
-      - name: Authenticate to Production Org
-        if: github.ref_name == 'main'
-        run: |
-          echo "${{ secrets.PROD_SF_JWT_KEY }}" > server.key
-          sf org login jwt \
-            --client-id "${{ secrets.PROD_SF_CLIENT_ID }}" \
-            --jwt-key-file server.key \
-            --username "${{ secrets.PROD_SF_USERNAME }}" \
-            --instance-url https://login.salesforce.com \
-            --alias target-org
+          if [ "${{ steps.tests.outputs.test_level }}" = "RunSpecifiedTests" ]; then
+            echo "Running changed Apex test classes: ${{ steps.tests.outputs.test_classes }}"
+            sf apex run test \
+              --target-org target-org \
+              --tests "${{ steps.tests.outputs.test_classes }}" \
+              --result-format human \
+              --code-coverage \
+              --wait 30
+          else
+            echo "Running all local Apex tests"
+            sf apex run test \
+              --target-org target-org \
+              --test-level RunLocalTests \
+              --result-format human \
+              --code-coverage \
+              --wait 30
+          fi
 
       - name: Validate Deployment
+        if: steps.delta.outputs.should_deploy == 'true'
         id: validate
         run: |
-          sf project deploy validate \
-            --manifest manifest/package.xml \
-            --target-org target-org \
-            --test-level RunSpecifiedTests \
-            --tests WorkflowDataMapperTest \
-            --json > validate-result.json
+          if [ "${{ steps.tests.outputs.test_level }}" = "RunSpecifiedTests" ]; then
+            sf project deploy validate \
+              --manifest changed-sources/package/package.xml \
+              --target-org target-org \
+              --test-level RunSpecifiedTests \
+              --tests "${{ steps.tests.outputs.test_classes }}" \
+              --json > validate-result.json
+          else
+            sf project deploy validate \
+              --manifest changed-sources/package/package.xml \
+              --target-org target-org \
+              --test-level "${{ steps.tests.outputs.test_level }}" \
+              --json > validate-result.json
+          fi
 
           DEPLOY_ID=$(jq -r '.result.id // empty' validate-result.json)
           if [ -z "$DEPLOY_ID" ]; then
@@ -80,6 +189,7 @@ jobs:
           echo "deploy_id=$DEPLOY_ID" >> "$GITHUB_OUTPUT"
 
       - name: Quick Deploy
+        if: steps.delta.outputs.should_deploy == 'true'
         run: |
           sf project deploy quick \
             --job-id "${{ steps.validate.outputs.deploy_id }}" \
