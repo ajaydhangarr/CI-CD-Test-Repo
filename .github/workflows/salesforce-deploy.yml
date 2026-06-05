@@ -34,15 +34,25 @@ jobs:
       - name: Install Delta Deployment Plugin
         run: echo y | sf plugins install sfdx-git-delta
 
+      # BUG 2 FIX — First push pe HEAD~1 exist nahi karta
+      # Ab pehli push pe poora force-app deploy hoga
       - name: Generate Delta Package
         id: delta
         run: |
           mkdir -p changed-sources
+
           FROM_COMMIT="${{ github.event.before }}"
           TO_COMMIT="${{ github.sha }}"
 
+          # First push ya zero commit handle karo
           if [ -z "$FROM_COMMIT" ] || [ "$FROM_COMMIT" = "0000000000000000000000000000000000000000" ]; then
-            FROM_COMMIT="HEAD~1"
+            COMMIT_COUNT=$(git rev-list --count HEAD)
+            if [ "$COMMIT_COUNT" -le 1 ]; then
+              echo "First commit detected — deploying full force-app"
+              FROM_COMMIT=$(git hash-object -t tree /dev/null)
+            else
+              FROM_COMMIT="HEAD~1"
+            fi
           fi
 
           echo "Generating delta from $FROM_COMMIT to $TO_COMMIT"
@@ -91,10 +101,10 @@ jobs:
             echo "Detected changed Apex test classes: $TEST_CLASSES"
           elif [ -n "$APEX_CHANGED" ]; then
             TEST_LEVEL="RunLocalTests"
-            echo "Apex changed but no changed *Test.cls file was found. Running local tests for deployment safety."
+            echo "Apex changed but no Test.cls found. Running local tests."
           else
             TEST_LEVEL="NoTestRun"
-            echo "No Apex class or trigger changes found. Skipping Apex tests."
+            echo "No Apex changes found. Skipping tests."
           fi
 
           echo "test_level=$TEST_LEVEL" >> "$GITHUB_OUTPUT"
@@ -142,56 +152,61 @@ jobs:
             --instance-url https://login.salesforce.com \
             --alias target-org
 
-      - name: Run Apex Tests
-        if: steps.delta.outputs.should_deploy == 'true' && steps.tests.outputs.test_level != 'NoTestRun'
-        run: |
-          if [ "${{ steps.tests.outputs.test_level }}" = "RunSpecifiedTests" ]; then
-            echo "Running changed Apex test classes: ${{ steps.tests.outputs.test_classes }}"
-            sf apex run test \
-              --target-org target-org \
-              --tests "${{ steps.tests.outputs.test_classes }}" \
-              --result-format human \
-              --code-coverage \
-              --wait 30
-          else
-            echo "Running all local Apex tests"
-            sf apex run test \
-              --target-org target-org \
-              --test-level RunLocalTests \
-              --result-format human \
-              --code-coverage \
-              --wait 30
-          fi
+          # BUG 5 FIX — server.key cleanup
+          rm -f server.key
 
+      # BUG 4 FIX — Run Apex Tests step hata diya
+      # Tests ab sirf Validate step ke andar chalenge — double execution nahi hoga
+
+      # BUG 1 + BUG 3 FIX — NoTestRun alag handle kiya
+      # BUG 3 FIX — deploy_id empty hone pe clear error
       - name: Validate Deployment
         if: steps.delta.outputs.should_deploy == 'true'
         id: validate
         run: |
-          if [ "${{ steps.tests.outputs.test_level }}" = "RunSpecifiedTests" ]; then
+          TEST_LEVEL="${{ steps.tests.outputs.test_level }}"
+          TEST_CLASSES="${{ steps.tests.outputs.test_classes }}"
+
+          if [ "$TEST_LEVEL" = "RunSpecifiedTests" ]; then
             sf project deploy validate \
               --manifest changed-sources/package/package.xml \
               --target-org target-org \
               --test-level RunSpecifiedTests \
-              --tests "${{ steps.tests.outputs.test_classes }}" \
+              --tests "$TEST_CLASSES" \
               --json > validate-result.json
-          else
+
+          elif [ "$TEST_LEVEL" = "NoTestRun" ]; then
+            # BUG 1 FIX — NoTestRun ka alag case
             sf project deploy validate \
               --manifest changed-sources/package/package.xml \
               --target-org target-org \
-              --test-level "${{ steps.tests.outputs.test_level }}" \
+              --test-level NoTestRun \
+              --json > validate-result.json
+
+          else
+            # RunLocalTests
+            sf project deploy validate \
+              --manifest changed-sources/package/package.xml \
+              --target-org target-org \
+              --test-level RunLocalTests \
               --json > validate-result.json
           fi
 
+          # BUG 3 FIX — deploy_id missing pe clear error
           DEPLOY_ID=$(jq -r '.result.id // empty' validate-result.json)
           if [ -z "$DEPLOY_ID" ]; then
+            echo "ERROR: deploy_id not found in validate result. Full output:"
             cat validate-result.json
             exit 1
           fi
           echo "deploy_id=$DEPLOY_ID" >> "$GITHUB_OUTPUT"
+          echo "Validation successful. Deploy ID: $DEPLOY_ID"
 
+      # BUG 3 FIX — explicit deploy_id check before quick deploy
       - name: Quick Deploy
-        if: steps.delta.outputs.should_deploy == 'true'
+        if: steps.delta.outputs.should_deploy == 'true' && steps.validate.outputs.deploy_id != ''
         run: |
+          echo "Running Quick Deploy with job ID: ${{ steps.validate.outputs.deploy_id }}"
           sf project deploy quick \
             --job-id "${{ steps.validate.outputs.deploy_id }}" \
             --target-org target-org
