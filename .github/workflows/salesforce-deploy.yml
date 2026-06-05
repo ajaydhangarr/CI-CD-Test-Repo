@@ -37,6 +37,7 @@ jobs:
       - name: Generate Delta Package
         id: delta
         run: |
+          mkdir -p changed-sources
           FROM_COMMIT="${{ github.event.before }}"
           TO_COMMIT="${{ github.sha }}"
 
