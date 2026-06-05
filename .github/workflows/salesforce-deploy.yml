@@ -7,6 +7,11 @@ on:
       - uat
       - main
   workflow_dispatch:
+    inputs:
+      from_ref:
+        description: "Base commit/ref for delta (leave blank for HEAD~1)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -25,62 +30,202 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Salesforce CLI
         run: npm install -g @salesforce/cli
 
-      - name: Authenticate to QA Org
-        if: github.ref_name == 'qa'
-        run: |
-          echo "${{ secrets.SF_JWT_KEY }}" > server.key
-          sf org login jwt \
-            --client-id "${{ secrets.SF_CLIENT_ID }}" \
-            --jwt-key-file server.key \
-            --username "${{ secrets.SF_USERNAME }}" \
-            --instance-url https://login.salesforce.com \
-            --alias target-org
+      - name: Install Delta Deployment Plugin
+        run: echo y | sf plugins install sfdx-git-delta
 
-      - name: Authenticate to UAT Org
-        if: github.ref_name == 'uat'
+      - name: Generate Delta Package
+        id: delta
         run: |
-          echo "${{ secrets.UAT_SF_JWT_KEY }}" > server.key
-          sf org login jwt \
-            --client-id "${{ secrets.UAT_SF_CLIENT_ID }}" \
-            --jwt-key-file server.key \
-            --username "${{ secrets.UAT_SF_USERNAME }}" \
-            --instance-url https://login.salesforce.com \
-            --alias target-org
+          mkdir -p changed-sources
 
-      - name: Authenticate to Production Org
-        if: github.ref_name == 'main'
+          FROM_COMMIT="${{ github.event.inputs.from_ref || github.event.before }}"
+          TO_COMMIT="${{ github.sha }}"
+
+          # FIX: workflow_dispatch input takes priority; fall back safely
+          if [ -z "$FROM_COMMIT" ] || [ "$FROM_COMMIT" = "0000000000000000000000000000000000000000" ]; then
+            COMMIT_COUNT=$(git rev-list --count HEAD)
+            if [ "$COMMIT_COUNT" -le 1 ]; then
+              echo "First commit detected — deploying full force-app"
+              FROM_COMMIT=$(git hash-object -t tree /dev/null)
+            else
+              FROM_COMMIT="HEAD~1"
+            fi
+          fi
+
+          # FIX: guard against force-pushes where FROM_COMMIT no longer exists
+          if ! git cat-file -e "${FROM_COMMIT}^{commit}" 2>/dev/null; then
+            echo "WARNING: FROM_COMMIT ($FROM_COMMIT) not found in history (possible force-push). Falling back to HEAD~1."
+            FROM_COMMIT="HEAD~1"
+          fi
+
+          echo "Generating delta from $FROM_COMMIT to $TO_COMMIT"
+          sf sgd source delta \
+            --from "$FROM_COMMIT" \
+            --to "$TO_COMMIT" \
+            --output-dir changed-sources \
+            --generate-delta \
+            --source-dir force-app
+
+          echo "Generated delta package.xml:"
+          cat changed-sources/package/package.xml
+
+          if grep -q "<types>" changed-sources/package/package.xml; then
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+            echo "from_commit=$FROM_COMMIT" >> "$GITHUB_OUTPUT"
+            echo "to_commit=$TO_COMMIT" >> "$GITHUB_OUTPUT"
+          else
+            echo "No deployable Salesforce metadata changes found."
+            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # FIX: explicit skip-notification so green runs are never silently empty
+      # Using != 'true' instead of == 'false' to avoid GitHub Actions string comparison quirks
+      - name: No Changes to Deploy
+        if: steps.delta.outputs.should_deploy != 'true'
         run: |
-          echo "${{ secrets.PROD_SF_JWT_KEY }}" > server.key
+          echo "## ⏭️ Deployment Skipped" >> "$GITHUB_STEP_SUMMARY"
+          echo "No deployable Salesforce metadata changes were detected in this push." >> "$GITHUB_STEP_SUMMARY"
+          echo "No deployable Salesforce metadata changes found — skipping all deploy steps."
+
+      - name: Detect Apex Test Scope
+        if: steps.delta.outputs.should_deploy == 'true'
+        id: tests
+        run: |
+          CHANGED_FILES="$(git diff --name-only "${{ steps.delta.outputs.from_commit }}" "${{ steps.delta.outputs.to_commit }}")"
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+
+          # FIX: strip empty lines before paste to prevent leading/trailing commas
+          TEST_CLASSES="$(
+            echo "$CHANGED_FILES" |
+              grep -E '^force-app/.*/classes/[^/]*Test\.cls$' |
+              sed -E 's#.*/([^/]+)\.cls#\1#' |
+              grep -v '^$' |
+              sort -u |
+              paste -sd, -
+          )"
+
+          APEX_CHANGED="$(
+            echo "$CHANGED_FILES" |
+              grep -E '^force-app/.*/(classes/[^/]+\.cls|triggers/[^/]+\.trigger)$' || true
+          )"
+
+          if [ -n "$TEST_CLASSES" ]; then
+            TEST_LEVEL="RunSpecifiedTests"
+            echo "Detected changed Apex test classes: $TEST_CLASSES"
+          elif [ -n "$APEX_CHANGED" ]; then
+            TEST_LEVEL="RunLocalTests"
+            echo "Apex changed but no Test.cls found. Running local tests."
+          else
+            TEST_LEVEL="NoTestRun"
+            echo "No Apex changes found. Skipping tests."
+          fi
+
+          echo "test_level=$TEST_LEVEL" >> "$GITHUB_OUTPUT"
+          echo "test_classes=$TEST_CLASSES" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Salesforce Org
+        if: steps.delta.outputs.should_deploy == 'true'
+        env:
+          QA_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
+          QA_USERNAME: ${{ secrets.SF_USERNAME }}
+          QA_JWT_KEY: ${{ secrets.SF_JWT_KEY }}
+          UAT_CLIENT_ID: ${{ secrets.UAT_SF_CLIENT_ID }}
+          UAT_USERNAME: ${{ secrets.UAT_SF_USERNAME }}
+          UAT_JWT_KEY: ${{ secrets.UAT_SF_JWT_KEY }}
+          PROD_CLIENT_ID: ${{ secrets.PROD_SF_CLIENT_ID }}
+          PROD_USERNAME: ${{ secrets.PROD_SF_USERNAME }}
+          PROD_JWT_KEY: ${{ secrets.PROD_SF_JWT_KEY }}
+        run: |
+          if [ "${{ github.ref_name }}" = "qa" ]; then
+            CLIENT_ID="$QA_CLIENT_ID"
+            USERNAME="$QA_USERNAME"
+            JWT_KEY="$QA_JWT_KEY"
+            TARGET_ENV="QA"
+          elif [ "${{ github.ref_name }}" = "uat" ]; then
+            CLIENT_ID="$UAT_CLIENT_ID"
+            USERNAME="$UAT_USERNAME"
+            JWT_KEY="$UAT_JWT_KEY"
+            TARGET_ENV="UAT"
+          elif [ "${{ github.ref_name }}" = "main" ]; then
+            CLIENT_ID="$PROD_CLIENT_ID"
+            USERNAME="$PROD_USERNAME"
+            JWT_KEY="$PROD_JWT_KEY"
+            TARGET_ENV="Production"
+          else
+            echo "Unsupported branch: ${{ github.ref_name }}"
+            exit 1
+          fi
+
+          echo "Authenticating to $TARGET_ENV org"
+          echo "$JWT_KEY" > server.key
+          # FIX: always delete the key file on exit, even if auth fails
+          trap 'rm -f server.key' EXIT
           sf org login jwt \
-            --client-id "${{ secrets.PROD_SF_CLIENT_ID }}" \
+            --client-id "$CLIENT_ID" \
             --jwt-key-file server.key \
-            --username "${{ secrets.PROD_SF_USERNAME }}" \
+            --username "$USERNAME" \
             --instance-url https://login.salesforce.com \
             --alias target-org
 
       - name: Validate Deployment
+        # FIX: removed the redundant standalone "Run Apex Tests" step entirely.
+        # Validate already runs tests internally — running them twice doubled CI time.
+        # Quick Deploy then reuses the validated deployment ID (zero re-test).
+        if: steps.delta.outputs.should_deploy == 'true' && steps.tests.outputs.test_level != 'NoTestRun'
         id: validate
         run: |
-          sf project deploy validate \
-            --manifest manifest/package.xml \
-            --target-org target-org \
-            --test-level RunSpecifiedTests \
-            --tests WorkflowDataMapperTest \
-            --json > validate-result.json
+          TEST_LEVEL="${{ steps.tests.outputs.test_level }}"
+          TEST_CLASSES="${{ steps.tests.outputs.test_classes }}"
+
+          if [ "$TEST_LEVEL" = "RunSpecifiedTests" ]; then
+            sf project deploy validate \
+              --manifest changed-sources/package/package.xml \
+              --target-org target-org \
+              --test-level RunSpecifiedTests \
+              --tests "$TEST_CLASSES" \
+              --json > validate-result.json
+          else
+            sf project deploy validate \
+              --manifest changed-sources/package/package.xml \
+              --target-org target-org \
+              --test-level RunLocalTests \
+              --json > validate-result.json
+          fi
 
           DEPLOY_ID=$(jq -r '.result.id // empty' validate-result.json)
           if [ -z "$DEPLOY_ID" ]; then
+            echo "ERROR: deploy_id not found. Full output:"
             cat validate-result.json
             exit 1
           fi
           echo "deploy_id=$DEPLOY_ID" >> "$GITHUB_OUTPUT"
+          echo "Validation successful. Deploy ID: $DEPLOY_ID"
+
+      - name: Direct Deploy (NoTestRun)
+        if: steps.delta.outputs.should_deploy == 'true' && steps.tests.outputs.test_level == 'NoTestRun'
+        run: |
+          echo "No Apex changes — running direct deploy with NoTestRun"
+          sf project deploy start \
+            --manifest changed-sources/package/package.xml \
+            --target-org target-org \
+            --test-level NoTestRun
 
       - name: Quick Deploy
+        # FIX: added steps.validate.outcome == 'success' guard so a failed validate
+        # with a partial/stale deploy_id can never accidentally trigger a quick deploy
+        if: >
+          steps.delta.outputs.should_deploy == 'true' &&
+          steps.validate.outcome == 'success' &&
+          steps.validate.outputs.deploy_id != ''
         run: |
+          echo "Running Quick Deploy with job ID: ${{ steps.validate.outputs.deploy_id }}"
           sf project deploy quick \
             --job-id "${{ steps.validate.outputs.deploy_id }}" \
             --target-org target-org
