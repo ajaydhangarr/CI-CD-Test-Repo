@@ -1,0 +1,86 @@
+name: Salesforce CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - qa
+      - uat
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: salesforce-deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to ${{ github.ref_name == 'main' && 'production' || github.ref_name }}
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ github.ref_name == 'main' && 'production' || github.ref_name }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Authenticate to QA Org
+        if: github.ref_name == 'qa'
+        run: |
+          echo "${{ secrets.QA_SF_JWT_KEY }}" > server.key
+          sf org login jwt \
+            --client-id "${{ secrets.QA_SF_CLIENT_ID }}" \
+            --jwt-key-file server.key \
+            --username "${{ secrets.QA_SF_USERNAME }}" \
+            --instance-url https://login.salesforce.com \
+            --alias target-org
+
+      - name: Authenticate to UAT Org
+        if: github.ref_name == 'uat'
+        run: |
+          echo "${{ secrets.UAT_SF_JWT_KEY }}" > server.key
+          sf org login jwt \
+            --client-id "${{ secrets.UAT_SF_CLIENT_ID }}" \
+            --jwt-key-file server.key \
+            --username "${{ secrets.UAT_SF_USERNAME }}" \
+            --instance-url https://login.salesforce.com \
+            --alias target-org
+
+      - name: Authenticate to Production Org
+        if: github.ref_name == 'main'
+        run: |
+          echo "${{ secrets.PROD_SF_JWT_KEY }}" > server.key
+          sf org login jwt \
+            --client-id "${{ secrets.PROD_SF_CLIENT_ID }}" \
+            --jwt-key-file server.key \
+            --username "${{ secrets.PROD_SF_USERNAME }}" \
+            --instance-url https://login.salesforce.com \
+            --alias target-org
+
+      - name: Validate Deployment
+        id: validate
+        run: |
+          sf project deploy validate \
+            --manifest manifest/package.xml \
+            --target-org target-org \
+            --test-level RunSpecifiedTests \
+            --tests WorkflowDataMapperTest \
+            --json > validate-result.json
+
+          DEPLOY_ID=$(jq -r '.result.id // empty' validate-result.json)
+          if [ -z "$DEPLOY_ID" ]; then
+            cat validate-result.json
+            exit 1
+          fi
+          echo "deploy_id=$DEPLOY_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Quick Deploy
+        run: |
+          sf project deploy quick \
+            --job-id "${{ steps.validate.outputs.deploy_id }}" \
+            --target-org target-org
