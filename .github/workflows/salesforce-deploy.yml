@@ -7,6 +7,11 @@ on:
       - uat
       - main
   workflow_dispatch:
+    inputs:
+      from_ref:
+        description: "Base commit/ref for delta (leave blank for HEAD~1)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -34,17 +39,15 @@ jobs:
       - name: Install Delta Deployment Plugin
         run: echo y | sf plugins install sfdx-git-delta
 
-      # BUG 2 FIX — First push pe HEAD~1 exist nahi karta
-      # Ab pehli push pe poora force-app deploy hoga
       - name: Generate Delta Package
         id: delta
         run: |
           mkdir -p changed-sources
 
-          FROM_COMMIT="${{ github.event.before }}"
+          FROM_COMMIT="${{ github.event.inputs.from_ref || github.event.before }}"
           TO_COMMIT="${{ github.sha }}"
 
-          # First push ya zero commit handle karo
+          # FIX: workflow_dispatch input takes priority; fall back safely
           if [ -z "$FROM_COMMIT" ] || [ "$FROM_COMMIT" = "0000000000000000000000000000000000000000" ]; then
             COMMIT_COUNT=$(git rev-list --count HEAD)
             if [ "$COMMIT_COUNT" -le 1 ]; then
@@ -53,6 +56,12 @@ jobs:
             else
               FROM_COMMIT="HEAD~1"
             fi
+          fi
+
+          # FIX: guard against force-pushes where FROM_COMMIT no longer exists
+          if ! git cat-file -e "${FROM_COMMIT}^{commit}" 2>/dev/null; then
+            echo "WARNING: FROM_COMMIT ($FROM_COMMIT) not found in history (possible force-push). Falling back to HEAD~1."
+            FROM_COMMIT="HEAD~1"
           fi
 
           echo "Generating delta from $FROM_COMMIT to $TO_COMMIT"
@@ -75,6 +84,14 @@ jobs:
             echo "should_deploy=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # FIX: explicit skip-notification so green runs are never silently empty
+      - name: No Changes to Deploy
+        if: steps.delta.outputs.should_deploy == 'false'
+        run: |
+          echo "## ⏭️ Deployment Skipped" >> "$GITHUB_STEP_SUMMARY"
+          echo "No deployable Salesforce metadata changes were detected in this push." >> "$GITHUB_STEP_SUMMARY"
+          echo "No deployable Salesforce metadata changes found — skipping all deploy steps."
+
       - name: Detect Apex Test Scope
         if: steps.delta.outputs.should_deploy == 'true'
         id: tests
@@ -83,10 +100,12 @@ jobs:
           echo "Changed files:"
           echo "$CHANGED_FILES"
 
+          # FIX: strip empty lines before paste to prevent leading/trailing commas
           TEST_CLASSES="$(
             echo "$CHANGED_FILES" |
               grep -E '^force-app/.*/classes/[^/]*Test\.cls$' |
               sed -E 's#.*/([^/]+)\.cls#\1#' |
+              grep -v '^$' |
               sort -u |
               paste -sd, -
           )"
@@ -145,6 +164,8 @@ jobs:
 
           echo "Authenticating to $TARGET_ENV org"
           echo "$JWT_KEY" > server.key
+          # FIX: always delete the key file on exit, even if auth fails
+          trap 'rm -f server.key' EXIT
           sf org login jwt \
             --client-id "$CLIENT_ID" \
             --jwt-key-file server.key \
@@ -152,16 +173,11 @@ jobs:
             --instance-url https://login.salesforce.com \
             --alias target-org
 
-          # BUG 5 FIX — server.key cleanup
-          rm -f server.key
-
-      # BUG 4 FIX — Run Apex Tests step hata diya
-      # Tests ab sirf Validate step ke andar chalenge — double execution nahi hoga
-
-      # BUG 1 + BUG 3 FIX — NoTestRun alag handle kiya
-      # BUG 3 FIX — deploy_id empty hone pe clear error
       - name: Validate Deployment
-        if: steps.delta.outputs.should_deploy == 'true'
+        # FIX: removed the redundant standalone "Run Apex Tests" step entirely.
+        # Validate already runs tests internally — running them twice doubled CI time.
+        # Quick Deploy then reuses the validated deployment ID (zero re-test).
+        if: steps.delta.outputs.should_deploy == 'true' && steps.tests.outputs.test_level != 'NoTestRun'
         id: validate
         run: |
           TEST_LEVEL="${{ steps.tests.outputs.test_level }}"
@@ -174,17 +190,7 @@ jobs:
               --test-level RunSpecifiedTests \
               --tests "$TEST_CLASSES" \
               --json > validate-result.json
-
-          elif [ "$TEST_LEVEL" = "NoTestRun" ]; then
-            # BUG 1 FIX — NoTestRun ka alag case
-            sf project deploy validate \
-              --manifest changed-sources/package/package.xml \
-              --target-org target-org \
-              --test-level NoTestRun \
-              --json > validate-result.json
-
           else
-            # RunLocalTests
             sf project deploy validate \
               --manifest changed-sources/package/package.xml \
               --target-org target-org \
@@ -192,19 +198,31 @@ jobs:
               --json > validate-result.json
           fi
 
-          # BUG 3 FIX — deploy_id missing pe clear error
           DEPLOY_ID=$(jq -r '.result.id // empty' validate-result.json)
           if [ -z "$DEPLOY_ID" ]; then
-            echo "ERROR: deploy_id not found in validate result. Full output:"
+            echo "ERROR: deploy_id not found. Full output:"
             cat validate-result.json
             exit 1
           fi
           echo "deploy_id=$DEPLOY_ID" >> "$GITHUB_OUTPUT"
           echo "Validation successful. Deploy ID: $DEPLOY_ID"
 
-      # BUG 3 FIX — explicit deploy_id check before quick deploy
+      - name: Direct Deploy (NoTestRun)
+        if: steps.delta.outputs.should_deploy == 'true' && steps.tests.outputs.test_level == 'NoTestRun'
+        run: |
+          echo "No Apex changes — running direct deploy with NoTestRun"
+          sf project deploy start \
+            --manifest changed-sources/package/package.xml \
+            --target-org target-org \
+            --test-level NoTestRun
+
       - name: Quick Deploy
-        if: steps.delta.outputs.should_deploy == 'true' && steps.validate.outputs.deploy_id != ''
+        # FIX: added steps.validate.outcome == 'success' guard so a failed validate
+        # with a partial/stale deploy_id can never accidentally trigger a quick deploy
+        if: >
+          steps.delta.outputs.should_deploy == 'true' &&
+          steps.validate.outcome == 'success' &&
+          steps.validate.outputs.deploy_id != ''
         run: |
           echo "Running Quick Deploy with job ID: ${{ steps.validate.outputs.deploy_id }}"
           sf project deploy quick \
