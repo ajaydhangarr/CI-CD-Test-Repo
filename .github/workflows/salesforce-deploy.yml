@@ -85,8 +85,9 @@ jobs:
           fi
 
       # FIX: explicit skip-notification so green runs are never silently empty
+      # Using != 'true' instead of == 'false' to avoid GitHub Actions string comparison quirks
       - name: No Changes to Deploy
-        if: steps.delta.outputs.should_deploy == 'false'
+        if: steps.delta.outputs.should_deploy != 'true'
         run: |
           echo "## ⏭️ Deployment Skipped" >> "$GITHUB_STEP_SUMMARY"
           echo "No deployable Salesforce metadata changes were detected in this push." >> "$GITHUB_STEP_SUMMARY"
