@@ -4,12 +4,9 @@
     <label>Student Manager PS</label>
     <description>Grants full access to the Student__c object and all its custom fields</description>
 
+    <!-- FIX: Removed StudentServiceTest class reference — test classes should never be in Permission Sets -->
     <classAccesses>
         <apexClass>StudentService</apexClass>
-        <enabled>true</enabled>
-    </classAccesses>
-    <classAccesses>
-        <apexClass>StudentServiceTest</apexClass>
         <enabled>true</enabled>
     </classAccesses>
 
