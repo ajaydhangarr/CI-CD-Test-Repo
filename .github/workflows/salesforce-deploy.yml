@@ -203,7 +203,7 @@ jobs:
             --alias target-org
 
       - name: Validate Deployment
-        if: steps.delta.outputs.should_deploy == 'true' && steps.tests.outputs.test_level != 'NoTestRun'
+        if: steps.delta.outputs.should_deploy == 'true'
         id: validate
         run: |
           TEST_LEVEL="${{ steps.tests.outputs.test_level }}"
@@ -216,11 +216,17 @@ jobs:
               --test-level RunSpecifiedTests \
               --tests $TEST_CLASSES \
               --json > validate-result.json || true
-          else
+          elif [ "$TEST_LEVEL" = "RunLocalTests" ]; then
             sf project deploy validate \
               --manifest changed-sources/package/package.xml \
               --target-org target-org \
               --test-level RunLocalTests \
+              --json > validate-result.json || true
+          else
+            sf project deploy validate \
+              --manifest changed-sources/package/package.xml \
+              --target-org target-org \
+              --test-level NoTestRun \
               --json > validate-result.json || true
           fi
 
