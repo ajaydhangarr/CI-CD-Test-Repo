@@ -1,0 +1,17 @@
+.review-summary-card {
+    border-radius: 0.25rem;
+}
+
+.review-summary-list {
+    margin-bottom: 0;
+}
+
+.review-summary-list dt,
+.review-summary-list dd {
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+}
+
+.review-summary-list dd {
+    font-weight: 500;
+}
