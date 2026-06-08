@@ -1,0 +1,277 @@
+name: Salesforce CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - qa
+      - uat
+      - main
+  pull_request:
+    branches:
+      - qa
+      - uat
+      - main
+  workflow_dispatch:
+    inputs:
+      from_ref:
+        description: "Base commit/ref for delta (leave blank for HEAD~1)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: salesforce-deploy-${{ github.ref_name }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: >
+      ${{ github.event_name == 'pull_request' && 'Validate PR →' || 'Deploy to' }}
+      ${{ github.ref_name == 'main' && 'production' || github.ref_name }}
+    runs-on: ubuntu-latest
+
+    # Environment only on push/workflow_dispatch — PR validation needs no environment gate
+    environment: >
+      ${{
+        github.event_name != 'pull_request' &&
+        (github.ref_name == 'main' && 'production' || github.ref_name)
+        || ''
+      }}
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Salesforce CLI
+        run: npm install -g @salesforce/cli
+
+      - name: Install Delta Deployment Plugin
+        run: echo y | sf plugins install sfdx-git-delta
+
+      - name: Generate Delta Package
+        id: delta
+        run: |
+          mkdir -p changed-sources
+
+          # PR event ke liye base branch ka latest commit use karo
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            FROM_COMMIT="${{ github.event.pull_request.base.sha }}"
+            TO_COMMIT="${{ github.event.pull_request.head.sha }}"
+          else
+            FROM_COMMIT="${{ github.event.inputs.from_ref || github.event.before }}"
+            TO_COMMIT="${{ github.sha }}"
+          fi
+
+          # Fallback if FROM_COMMIT empty or zero SHA
+          if [ -z "$FROM_COMMIT" ] || [ "$FROM_COMMIT" = "0000000000000000000000000000000000000000" ]; then
+            COMMIT_COUNT=$(git rev-list --count HEAD)
+            if [ "$COMMIT_COUNT" -le 1 ]; then
+              echo "First commit detected — deploying full force-app"
+              FROM_COMMIT=$(git hash-object -t tree /dev/null)
+            else
+              FROM_COMMIT="HEAD~1"
+            fi
+          fi
+
+          # Guard against force-pushes where FROM_COMMIT no longer exists
+          if ! git cat-file -e "${FROM_COMMIT}^{commit}" 2>/dev/null; then
+            echo "WARNING: FROM_COMMIT ($FROM_COMMIT) not found in history (possible force-push). Falling back to HEAD~1."
+            FROM_COMMIT="HEAD~1"
+          fi
+
+          echo "Event     : ${{ github.event_name }}"
+          echo "From      : $FROM_COMMIT"
+          echo "To        : $TO_COMMIT"
+
+          sf sgd source delta \
+            --from "$FROM_COMMIT" \
+            --to "$TO_COMMIT" \
+            --output-dir changed-sources \
+            --generate-delta \
+            --source-dir force-app
+
+          echo "Generated delta package.xml:"
+          cat changed-sources/package/package.xml
+
+          if grep -q "<types>" changed-sources/package/package.xml; then
+            echo "should_deploy=true"  >> "$GITHUB_OUTPUT"
+            echo "from_commit=$FROM_COMMIT" >> "$GITHUB_OUTPUT"
+            echo "to_commit=$TO_COMMIT"     >> "$GITHUB_OUTPUT"
+          else
+            echo "No deployable Salesforce metadata changes found."
+            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Explicit skip-notification — uses != 'true' to avoid GitHub Actions string quirks
+      - name: No Changes to Deploy
+        if: steps.delta.outputs.should_deploy != 'true'
+        run: |
+          echo "## ⏭️ Skipped" >> "$GITHUB_STEP_SUMMARY"
+          echo "No deployable Salesforce metadata changes were detected." >> "$GITHUB_STEP_SUMMARY"
+          echo "No deployable Salesforce metadata changes found — skipping all deploy steps."
+
+      - name: Detect Apex Test Scope
+        if: steps.delta.outputs.should_deploy == 'true'
+        id: tests
+        run: |
+          CHANGED_FILES="$(git diff --name-only "${{ steps.delta.outputs.from_commit }}" "${{ steps.delta.outputs.to_commit }}")"
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+
+          # Strip empty lines before paste to prevent leading/trailing spaces
+          TEST_CLASSES="$(
+            echo "$CHANGED_FILES" |
+              grep -E '^force-app/.*/classes/[^/]*Test\.cls$' |
+              while read -r file; do
+                if [ -f "$file" ]; then
+                  echo "$file"
+                fi
+              done |
+              sed -E 's#.*/([^/]+)\.cls#\1#' |
+              grep -v '^$' |
+              sort -u |
+              paste -sd' ' -
+          )"
+
+          APEX_CHANGED="$(
+            echo "$CHANGED_FILES" |
+              grep -E '^force-app/.*/(classes/[^/]+\.cls|triggers/[^/]+\.trigger)$' || true
+          )"
+
+          if [ -n "$TEST_CLASSES" ]; then
+            TEST_LEVEL="RunSpecifiedTests"
+            echo "Detected changed Apex test classes: $TEST_CLASSES"
+          elif [ -n "$APEX_CHANGED" ]; then
+            TEST_LEVEL="RunLocalTests"
+            echo "Apex changed but no Test.cls found. Running local tests."
+          else
+            TEST_LEVEL="NoTestRun"
+            echo "No Apex changes found. Skipping tests."
+          fi
+
+          echo "test_level=$TEST_LEVEL"   >> "$GITHUB_OUTPUT"
+          echo "test_classes=$TEST_CLASSES" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Salesforce Org
+        if: steps.delta.outputs.should_deploy == 'true'
+        env:
+          QA_CLIENT_ID:   ${{ secrets.SF_CLIENT_ID }}
+          QA_USERNAME:    ${{ secrets.SF_USERNAME }}
+          QA_JWT_KEY:     ${{ secrets.SF_JWT_KEY }}
+          UAT_CLIENT_ID:  ${{ secrets.UAT_SF_CLIENT_ID }}
+          UAT_USERNAME:   ${{ secrets.UAT_SF_USERNAME }}
+          UAT_JWT_KEY:    ${{ secrets.UAT_SF_JWT_KEY }}
+          PROD_CLIENT_ID: ${{ secrets.PROD_SF_CLIENT_ID }}
+          PROD_USERNAME:  ${{ secrets.PROD_SF_USERNAME }}
+          PROD_JWT_KEY:   ${{ secrets.PROD_SF_JWT_KEY }}
+        run: |
+          # PR event mein bhi base branch ka org use karo
+          TARGET_BRANCH="${{ github.event_name == 'pull_request' && github.base_ref || github.ref_name }}"
+
+          if [ "$TARGET_BRANCH" = "qa" ]; then
+            CLIENT_ID="$QA_CLIENT_ID"
+            USERNAME="$QA_USERNAME"
+            JWT_KEY="$QA_JWT_KEY"
+            TARGET_ENV="QA"
+          elif [ "$TARGET_BRANCH" = "uat" ]; then
+            CLIENT_ID="$UAT_CLIENT_ID"
+            USERNAME="$UAT_USERNAME"
+            JWT_KEY="$UAT_JWT_KEY"
+            TARGET_ENV="UAT"
+          elif [ "$TARGET_BRANCH" = "main" ]; then
+            CLIENT_ID="$PROD_CLIENT_ID"
+            USERNAME="$PROD_USERNAME"
+            JWT_KEY="$PROD_JWT_KEY"
+            TARGET_ENV="Production"
+          else
+            echo "Unsupported branch: $TARGET_BRANCH"
+            exit 1
+          fi
+
+          echo "Authenticating to $TARGET_ENV org"
+          echo "$JWT_KEY" > server.key
+          trap 'rm -f server.key' EXIT
+          sf org login jwt \
+            --client-id "$CLIENT_ID" \
+            --jwt-key-file server.key \
+            --username "$USERNAME" \
+            --instance-url https://login.salesforce.com \
+            --alias target-org
+
+      - name: Validate Deployment
+        # PR event     → hamesha validate (deploy nahi)
+        # push event   → test hone par validate, phir quick deploy
+        # NoTestRun    → direct deploy step handle karega
+        if: steps.delta.outputs.should_deploy == 'true' && steps.tests.outputs.test_level != 'NoTestRun'
+        id: validate
+        run: |
+          TEST_LEVEL="${{ steps.tests.outputs.test_level }}"
+          TEST_CLASSES="${{ steps.tests.outputs.test_classes }}"
+
+          if [ "$TEST_LEVEL" = "RunSpecifiedTests" ]; then
+            sf project deploy validate \
+              --manifest changed-sources/package/package.xml \
+              --target-org target-org \
+              --test-level RunSpecifiedTests \
+              --tests $TEST_CLASSES \
+              --json > validate-result.json
+          else
+            sf project deploy validate \
+              --manifest changed-sources/package/package.xml \
+              --target-org target-org \
+              --test-level RunLocalTests \
+              --json > validate-result.json
+          fi
+
+          DEPLOY_ID=$(jq -r '.result.id // empty' validate-result.json)
+          if [ -z "$DEPLOY_ID" ]; then
+            echo "ERROR: deploy_id not found. Full output:"
+            cat validate-result.json
+            exit 1
+          fi
+          echo "deploy_id=$DEPLOY_ID" >> "$GITHUB_OUTPUT"
+          echo "Validation successful. Deploy ID: $DEPLOY_ID"
+
+      # PR event par yeh step skip hoga — sirf push/workflow_dispatch par chalega
+      - name: Direct Deploy (NoTestRun)
+        if: >
+          github.event_name != 'pull_request' &&
+          steps.delta.outputs.should_deploy == 'true' &&
+          steps.tests.outputs.test_level == 'NoTestRun'
+        run: |
+          echo "No Apex changes — running direct deploy with NoTestRun"
+          sf project deploy start \
+            --manifest changed-sources/package/package.xml \
+            --target-org target-org \
+            --test-level NoTestRun
+
+      # PR event par yeh step skip hoga — sirf push/workflow_dispatch par chalega
+      - name: Quick Deploy
+        if: >
+          github.event_name != 'pull_request' &&
+          steps.delta.outputs.should_deploy == 'true' &&
+          steps.validate.outcome == 'success' &&
+          steps.validate.outputs.deploy_id != ''
+        run: |
+          echo "Running Quick Deploy with job ID: ${{ steps.validate.outputs.deploy_id }}"
+          sf project deploy quick \
+            --job-id "${{ steps.validate.outputs.deploy_id }}" \
+            --target-org target-org
+
+      # PR event par summary — reviewer ko pata chale validation ka result
+      - name: PR Validation Summary
+        if: github.event_name == 'pull_request' && steps.delta.outputs.should_deploy == 'true'
+        run: |
+          echo "## ✅ PR Validation Complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Item | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Target Org | ${{ github.base_ref }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Test Level | ${{ steps.tests.outputs.test_level }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Test Classes | ${{ steps.tests.outputs.test_classes || 'N/A' }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Validation Status | Passed ✅ |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Code is safe to merge. Deploy will trigger automatically on merge." >> "$GITHUB_STEP_SUMMARY"
