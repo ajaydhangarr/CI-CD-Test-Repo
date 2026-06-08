@@ -26,85 +26,76 @@ private class StudentServiceTest {
 
     @isTest
     static void testCreateStudent() {
-        // FIX: variable declared OUTSIDE runAs block so it's accessible after
-        Student__c s;
-
         System.runAs([SELECT Id FROM User WHERE Alias = 'tuser' LIMIT 1][0]) {
             Test.startTest();
-            s = StudentService.createStudent('Test Student', 20, 'test@example.com', 'Science', true);
+            Student__c s = StudentService.createStudent('Test Student', 20, 'test@example.com', 'Science', true);
             Test.stopTest();
-        }
 
-        System.assertNotEquals(null, s.Id, 'Student ID should not be null after creation');
-        Student__c retrieved = StudentService.getStudentById(s.Id);
-        System.assertEquals('Test Student',       retrieved.Name,       'Name should match');
-        System.assertEquals(20,                   retrieved.Age__c,     'Age should match');
-        System.assertEquals('test@example.com',   retrieved.Email__c,   'Email should match');
-        System.assertEquals('Science',            retrieved.Course__c,  'Course should match');
-        System.assertEquals(true,                 retrieved.IsActive__c,'IsActive should be true');
+            System.assertNotEquals(null, s.Id, 'Student ID should not be null after creation');
+            Student__c retrieved = StudentService.getStudentById(s.Id);
+            System.assertEquals('Test Student',       retrieved.Name,       'Name should match');
+            System.assertEquals(20,                   retrieved.Age__c,     'Age should match');
+            System.assertEquals('test@example.com',   retrieved.Email__c,   'Email should match');
+            System.assertEquals('Science',            retrieved.Course__c,  'Course should match');
+            System.assertEquals(true,                 retrieved.IsActive__c,'IsActive should be true');
+        }
     }
 
     @isTest
     static void testGetStudents() {
-        StudentService.createStudent('Student One', 21, 'one@example.com', 'Commerce', false);
-        StudentService.createStudent('Student Two', 22, 'two@example.com', 'Arts',     true);
-
-        // FIX: variable declared OUTSIDE runAs block
-        List<Student__c> students;
-
         System.runAs([SELECT Id FROM User WHERE Alias = 'tuser' LIMIT 1][0]) {
-            Test.startTest();
-            students = StudentService.getStudents();
-            Test.stopTest();
-        }
+            StudentService.createStudent('Student One', 21, 'one@example.com', 'Commerce', false);
+            StudentService.createStudent('Student Two', 22, 'two@example.com', 'Arts',     true);
 
-        System.assert(students.size() >= 2, 'Should retrieve at least 2 students');
+            Test.startTest();
+            List<Student__c> students = StudentService.getStudents();
+            Test.stopTest();
+
+            System.assert(students.size() >= 2, 'Should retrieve at least 2 students');
+        }
     }
 
     @isTest
     static void testGetStudentById_NullId() {
-        // FIX: variable declared OUTSIDE runAs block
-        Student__c result;
-
         System.runAs([SELECT Id FROM User WHERE Alias = 'tuser' LIMIT 1][0]) {
             Test.startTest();
-            result = StudentService.getStudentById(null);
+            Student__c result = StudentService.getStudentById(null);
             Test.stopTest();
-        }
 
-        System.assertEquals(null, result, 'Null ID should return null');
+            System.assertEquals(null, result, 'Null ID should return null');
+        }
     }
 
     @isTest
     static void testUpdateStudent() {
-        Student__c s = StudentService.createStudent('Original Student', 19, 'orig@example.com', 'Science', true);
-        s.Name   = 'Updated Student';
-        s.Age__c = 25;
-
         System.runAs([SELECT Id FROM User WHERE Alias = 'tuser' LIMIT 1][0]) {
+            Student__c s = StudentService.createStudent('Original Student', 19, 'orig@example.com', 'Science', true);
+            s.Name   = 'Updated Student';
+            s.Age__c = 25;
+
             Test.startTest();
             StudentService.updateStudent(s);
             Test.stopTest();
-        }
 
-        Student__c retrieved = StudentService.getStudentById(s.Id);
-        System.assertEquals('Updated Student', retrieved.Name,   'Name should have updated');
-        System.assertEquals(25,                retrieved.Age__c, 'Age should have updated');
+            Student__c retrieved = StudentService.getStudentById(s.Id);
+            System.assertEquals('Updated Student', retrieved.Name,   'Name should have updated');
+            System.assertEquals(25,                retrieved.Age__c, 'Age should have updated');
+        }
     }
 
     @isTest
     static void testDeleteStudent() {
-        Student__c s  = StudentService.createStudent('Student to Delete', 18, 'del@example.com', 'Arts', false);
-        Id          sId = s.Id;
-
         System.runAs([SELECT Id FROM User WHERE Alias = 'tuser' LIMIT 1][0]) {
+            Student__c s  = StudentService.createStudent('Student to Delete', 18, 'del@example.com', 'Arts', false);
+            Id          sId = s.Id;
+
             Test.startTest();
             StudentService.deleteStudent(sId);
             Test.stopTest();
-        }
 
-        Student__c retrieved = StudentService.getStudentById(sId);
-        System.assertEquals(null, retrieved, 'Student should be deleted');
+            Student__c retrieved = StudentService.getStudentById(sId);
+            System.assertEquals(null, retrieved, 'Student should be deleted');
+        }
     }
 
     @isTest
