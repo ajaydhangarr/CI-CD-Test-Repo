@@ -203,9 +203,6 @@ jobs:
             --alias target-org
 
       - name: Validate Deployment
-        # PR event     → hamesha validate (deploy nahi)
-        # push event   → test hone par validate, phir quick deploy
-        # NoTestRun    → direct deploy step handle karega
         if: steps.delta.outputs.should_deploy == 'true' && steps.tests.outputs.test_level != 'NoTestRun'
         id: validate
         run: |
@@ -218,36 +215,34 @@ jobs:
               --target-org target-org \
               --test-level RunSpecifiedTests \
               --tests $TEST_CLASSES \
-              --json > validate-result.json
+              --json > validate-result.json || true
           else
             sf project deploy validate \
               --manifest changed-sources/package/package.xml \
               --target-org target-org \
               --test-level RunLocalTests \
-              --json > validate-result.json
+              --json > validate-result.json || true
           fi
+
+          echo "=== FULL VALIDATE OUTPUT ==="
+          cat validate-result.json
+
+          echo "=== COMPONENT FAILURES ==="
+          jq -r '.result.details.componentFailures[]? | "[\(.problemType)] \(.fileName): \(.problem)"' validate-result.json || true
+
+          echo "=== TEST FAILURES ==="
+          jq -r '.result.details.runTestResult.failures[]? | "[\(.type)] \(.name).\(.methodName): \(.message)"' validate-result.json || true
 
           DEPLOY_ID=$(jq -r '.result.id // empty' validate-result.json)
-          if [ -z "$DEPLOY_ID" ]; then
-            echo "ERROR: deploy_id not found. Full output:"
-            cat validate-result.json
+          STATUS=$(jq -r '.result.status // empty' validate-result.json)
+
+          if [ -z "$DEPLOY_ID" ] || [ "$STATUS" != "Succeeded" ]; then
+            echo "ERROR: Validation failed. Status: $STATUS"
             exit 1
           fi
+
           echo "deploy_id=$DEPLOY_ID" >> "$GITHUB_OUTPUT"
           echo "Validation successful. Deploy ID: $DEPLOY_ID"
-
-      # PR event par yeh step skip hoga — sirf push/workflow_dispatch par chalega
-      - name: Direct Deploy (NoTestRun)
-        if: >
-          github.event_name != 'pull_request' &&
-          steps.delta.outputs.should_deploy == 'true' &&
-          steps.tests.outputs.test_level == 'NoTestRun'
-        run: |
-          echo "No Apex changes — running direct deploy with NoTestRun"
-          sf project deploy start \
-            --manifest changed-sources/package/package.xml \
-            --target-org target-org \
-            --test-level NoTestRun
 
       # PR event par yeh step skip hoga — sirf push/workflow_dispatch par chalega
       - name: Quick Deploy
