@@ -30,7 +30,7 @@ public with sharing class StudentService {
             Course__c = course,
             IsActive__c = isActive
         );
-        insert as user newStudent;
+        insert newStudent;
         return newStudent;
     }
 
@@ -38,7 +38,7 @@ public with sharing class StudentService {
         if (student == null || student.Id == null) {
             throw new IllegalArgumentException('Student record or ID cannot be null');
         }
-        update as user student;
+        update student;
         return student;
     }
 
@@ -47,6 +47,6 @@ public with sharing class StudentService {
             throw new IllegalArgumentException('Student ID cannot be null');
         }
         Student__c toDelete = new Student__c(Id = studentId);
-        delete as user toDelete;
+        delete toDelete;
     }
 }
