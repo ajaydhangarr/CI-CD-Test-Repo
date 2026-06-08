@@ -105,10 +105,15 @@ jobs:
           TEST_CLASSES="$(
             echo "$CHANGED_FILES" |
               grep -E '^force-app/.*/classes/[^/]*Test\.cls$' |
+              while read -r file; do
+                if [ -f "$file" ]; then
+                  echo "$file"
+                fi
+              done |
               sed -E 's#.*/([^/]+)\.cls#\1#' |
               grep -v '^$' |
               sort -u |
-              paste -sd, -
+              paste -sd' ' -
           )"
 
           APEX_CHANGED="$(
@@ -189,7 +194,7 @@ jobs:
               --manifest changed-sources/package/package.xml \
               --target-org target-org \
               --test-level RunSpecifiedTests \
-              --tests "$TEST_CLASSES" \
+              --tests $TEST_CLASSES \
               --json > validate-result.json
           else
             sf project deploy validate \
