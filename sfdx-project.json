@@ -5,8 +5,7 @@
       "default": true
     }
   ],
-  "name": "Multi-Step Workflow Platform",
   "namespace": "",
-  "sfdcLoginUrl": "https://login.salesforce.com",
-  "sourceApiVersion": "66.0"
+  "sourceApiVersion": "59.0",
+  "sfdcLoginUrl": "https://login.salesforce.com"
 }
