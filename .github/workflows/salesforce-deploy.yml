@@ -31,7 +31,6 @@ jobs:
       ${{ github.event_name == 'pull_request' && 'Validate PR →' || 'Deploy to' }}
       ${{ github.ref_name == 'main' && 'production' || github.ref_name }}
     runs-on: ubuntu-latest
-
     # Environment only on push/workflow_dispatch — PR validation needs no environment gate
     environment: >
       ${{
@@ -46,11 +45,29 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install Node Dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run ESLint (LWC)
+        run: npm run lint
+
+      - name: Run LWC Unit Tests
+        run: npm run test:unit
+
       - name: Install Salesforce CLI
         run: npm install -g @salesforce/cli
 
       - name: Install Delta Deployment Plugin
         run: echo y | sf plugins install sfdx-git-delta
+
+      - name: Install Salesforce Code Analyzer (Scanner)
+        run: echo y | sf plugins install @salesforce/sfdx-scanner
 
       - name: Generate Delta Package
         id: delta
@@ -156,18 +173,31 @@ jobs:
           echo "test_level=$TEST_LEVEL"   >> "$GITHUB_OUTPUT"
           echo "test_classes=$TEST_CLASSES" >> "$GITHUB_OUTPUT"
 
+      - name: Run Static Code Analysis
+        if: steps.delta.outputs.should_deploy == 'true'
+        run: |
+          CHANGED_APEX="$(git diff --name-only "${{ steps.delta.outputs.from_commit }}" "${{ steps.delta.outputs.to_commit }}" | grep -E '^force-app/.*(classes/[^/]+\.cls|triggers/[^/]+\.trigger)$' || true)"
+
+          if [ -n "$CHANGED_APEX" ]; then
+            TARGETS=$(echo "$CHANGED_APEX" | paste -sd "," -)
+            echo "Scanning target files: $TARGETS"
+            sf scanner run --target "$TARGETS" --engine "pmd" --severity-threshold 2
+          else
+            echo "No Apex files modified, skipping static analysis."
+          fi
+
       - name: Authenticate to Salesforce Org
         if: steps.delta.outputs.should_deploy == 'true'
         env:
-          QA_CLIENT_ID:   ${{ secrets.SF_CLIENT_ID }}
-          QA_USERNAME:    ${{ secrets.SF_USERNAME }}
-          QA_JWT_KEY:     ${{ secrets.SF_JWT_KEY }}
-          UAT_CLIENT_ID:  ${{ secrets.UAT_SF_CLIENT_ID }}
-          UAT_USERNAME:   ${{ secrets.UAT_SF_USERNAME }}
-          UAT_JWT_KEY:    ${{ secrets.UAT_SF_JWT_KEY }}
+          QA_CLIENT_ID: ${{ secrets.SF_CLIENT_ID }}
+          QA_USERNAME: ${{ secrets.SF_USERNAME }}
+          QA_JWT_KEY: ${{ secrets.SF_JWT_KEY }}
+          UAT_CLIENT_ID: ${{ secrets.UAT_SF_CLIENT_ID }}
+          UAT_USERNAME: ${{ secrets.UAT_SF_USERNAME }}
+          UAT_JWT_KEY: ${{ secrets.UAT_SF_JWT_KEY }}
           PROD_CLIENT_ID: ${{ secrets.PROD_SF_CLIENT_ID }}
-          PROD_USERNAME:  ${{ secrets.PROD_SF_USERNAME }}
-          PROD_JWT_KEY:   ${{ secrets.PROD_SF_JWT_KEY }}
+          PROD_USERNAME: ${{ secrets.PROD_SF_USERNAME }}
+          PROD_JWT_KEY: ${{ secrets.PROD_SF_JWT_KEY }}
         run: |
           # PR event mein bhi base branch ka org use karo
           TARGET_BRANCH="${{ github.event_name == 'pull_request' && github.base_ref || github.ref_name }}"
