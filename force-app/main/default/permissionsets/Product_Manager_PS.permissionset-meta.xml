@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<PermissionSet xmlns="http://soap.sforce.com/2006/04/metadata">
+    <hasActivationRequired>false</hasActivationRequired>
+    <label>Product Manager PS</label>
+    <description
+  >Grants full access to the Product__c object and all its custom fields</description>
+
+    <classAccesses>
+        <apexClass>ProductService</apexClass>
+        <enabled>true</enabled>
+    </classAccesses>
+
+    <objectPermissions>
+        <allowCreate>true</allowCreate>
+        <allowDelete>true</allowDelete>
+        <allowEdit>true</allowEdit>
+        <allowRead>true</allowRead>
+        <modifyAllRecords>true</modifyAllRecords>
+        <object>Product__c</object>
+        <viewAllRecords>true</viewAllRecords>
+    </objectPermissions>
+
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Product__c.Price__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Product__c.Quantity__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Product__c.Category__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+    <fieldPermissions>
+        <editable>true</editable>
+        <field>Product__c.InStock__c</field>
+        <readable>true</readable>
+    </fieldPermissions>
+
+    <tabSettings>
+        <tab>Product__c</tab>
+        <visibility>Visible</visibility>
+    </tabSettings>
+</PermissionSet>
