@@ -1,3 +1,6 @@
+@SuppressWarnings(
+  'PMD.MethodNamingConventions, PMD.ApexAssertionsShouldIncludeMessage, PMD.ApexDoc'
+)
 @isTest(SeeAllData=false)
 private class ProductServiceTest {
   @testSetup

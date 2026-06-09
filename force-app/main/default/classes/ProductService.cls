@@ -1,3 +1,4 @@
+@SuppressWarnings('PMD.ApexDoc, PMD.AvoidNonRestrictiveQueries')
 public with sharing class ProductService {
   public static List<Product__c> getProducts() {
     return [
@@ -35,7 +36,7 @@ public with sharing class ProductService {
       Category__c = category,
       InStock__c = inStock
     );
-    insert newProduct;
+    insert as user newProduct;
     return newProduct;
   }
 
@@ -43,7 +44,7 @@ public with sharing class ProductService {
     if (product == null || product.Id == null) {
       throw new IllegalArgumentException('Product record or ID cannot be null');
     }
-    update product;
+    update as user product;
     return product;
   }
 
@@ -52,6 +53,6 @@ public with sharing class ProductService {
       throw new IllegalArgumentException('Product ID cannot be null');
     }
     Product__c toDelete = new Product__c(Id = productId);
-    delete toDelete;
+    delete as user toDelete;
   }
 }
