@@ -55,4 +55,15 @@ public with sharing class ProductService {
     Product__c toDelete = new Product__c(Id = productId);
     delete as user toDelete;
   }
+
+  public static void soqlInLoopExample(Integer iterations) {
+    for (Integer i = 0; i < iterations; i++) {
+      List<Product__c> prods = [
+        SELECT Id
+        FROM Product__c
+        WITH USER_MODE
+        LIMIT 1
+      ];
+    }
+  }
 }
