@@ -189,4 +189,25 @@ private class ProductServiceTest {
       Test.stopTest();
     }
   }
+
+  @isTest
+  static void testSoqlInLoopPmdScenario() {
+    System.runAs([SELECT Id FROM User WHERE Alias = 'tpuser' LIMIT 1][0]) {
+      Test.startTest();
+      ProductService.soqlInLoopExample(5);
+      Test.stopTest();
+      System.assert(true, 'Executed 5 queries successfully');
+    }
+  }
+
+  @isTest
+  static void testGovernorLimitExceptionScenario() {
+    System.runAs([SELECT Id FROM User WHERE Alias = 'tpuser' LIMIT 1][0]) {
+      Test.startTest();
+      // This will throw a LimitException: Too many SOQL queries: 101
+      // Note that LimitException cannot be caught in Apex, so it will fail the test.
+      ProductService.soqlInLoopExample(105);
+      Test.stopTest();
+    }
+  }
 }
