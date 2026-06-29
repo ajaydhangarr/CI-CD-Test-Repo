@@ -7,7 +7,7 @@ public with sharing class ProductService {
       WITH USER_MODE
     ];
   }
-
+% test comment
   public static Product__c getProductById(Id productId) {
     if (productId == null) {
       return null;
